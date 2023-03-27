@@ -1,4 +1,4 @@
-package mysql
+package mysqlv
 
 import (
 	"bytes"
@@ -10,8 +10,9 @@ import (
 	"strings"
 )
 
-type KvDb struct {
-	db *sql.DB
+type Db struct {
+	db     *sql.DB
+	dbName string
 }
 
 type BaseConfig struct {
@@ -20,38 +21,69 @@ type BaseConfig struct {
 	DbName   string
 }
 
-func NewKvDb(config BaseConfig) (*KvDb, error) {
+func NewKvDb(config BaseConfig) (*Db, error) {
+	if config.DbName == "" || config.User == "" {
+		return nil, errors.New(`dxcf0g8gnk config.DbName == "" || config.User == ""`)
+	}
+	if ok, err := checkTable(config.DbName); ok {
+		return nil, err
+	}
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", config.User, config.Password, config.DbName))
 	if err != nil {
 		return nil, err
 	}
-	return &KvDb{
+	result, err := &Db{
 		db: db,
 	}, nil
+	row, err := db.Query("show databases like '" + config.DbName + "';")
+	if err == nil && row.Next() {
+		return result, nil
+	}
+	tmp, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", config.User, config.Password, "mysql"))
+	if err != nil {
+		return nil, err
+	}
+	_, err = tmp.Exec(`CREATE DATABASE ` + config.DbName)
+	if err != nil {
+		return nil, err
+	}
+	row, err = db.Query("show databases like '" + config.DbName + "';")
+	if err == nil && row.Next() {
+		return result, nil
+	}
+	return nil, err
 }
 
-func (db *KvDb) MustSet(table, k, v string) {
+func (db *Db) tryCreateDataBase(dbName string) error {
+	if ok, err := checkTable(dbName); ok {
+		return err
+	}
+	_, err := db.db.Exec("CREATE DATABASE " + dbName)
+	return err
+}
+
+func (db *Db) MustSet(table, k, v string) {
 	panicIfError(db.Set(table, k, v))
 }
 
-func (db *KvDb) MustGet(table, k string) string {
+func (db *Db) MustGet(table, k string) string {
 	str, err := db.Get(table, k)
 	panicIfError(err)
 	return str
 }
 
-func (db *KvDb) MustDelete(table, k string) {
+func (db *Db) MustDelete(table, k string) {
 	_, err := db.Delete(table, k)
 	panicIfError(err)
 }
 
-func (db *KvDb) MustGetRange(req GetRangeReq) []KV {
+func (db *Db) MustGetRange(req GetRangeReq) []KV {
 	result, err := db.GetRange(req)
 	panicIfError(err)
 	return result
 }
 
-func (db *KvDb) MustInsert(table, k, v string) {
+func (db *Db) MustInsert(table, k, v string) {
 	panicIfError(db.Insert(table, k, v))
 }
 
@@ -59,7 +91,7 @@ var gBadSqlTableChar = []string{
 	" ", ";",
 }
 
-func (db *KvDb) checkTable(table string) (bool, error) {
+func checkTable(table string) (bool, error) {
 	if table == "" {
 		return true, errors.New("c2dio84ic7 need table")
 	}
@@ -70,20 +102,30 @@ func (db *KvDb) checkTable(table string) (bool, error) {
 	}
 	return false, nil
 }
-func (db *KvDb) Set(table, k, v string) error {
-	if ok, err := db.checkTable(table); ok {
+
+func (db *Db) isTableNotExistError(err error) bool {
+	errMsg := err.Error()
+	return strings.Contains(errMsg, `Error 1146 (42S02): Table '`) &&
+		strings.Contains(errMsg, `' doesn't exist`)
+}
+
+func (db *Db) tryCreateTable(table string) error {
+	_, err := db.db.Exec("CREATE TABLE IF NOT EXISTS `" + table + "`(`k` VARCHAR(255) NOT NULL,`v` text ,PRIMARY KEY ( `k` ))ENGINE=InnoDB DEFAULT CHARSET=utf8;")
+	return err
+}
+
+func (db *Db) Set(table, k, v string) error {
+	if ok, err := checkTable(table); ok {
 		return err
 	}
 	result, err := db.db.Exec(`REPLACE INTO `+table+` (k,v) VALUES(?,?)`, k, v)
 	if err != nil {
-		if strings.Contains(err.Error(), `Error 1146 (42S02): Table '`) &&
-			strings.Contains(err.Error(), `' doesn't exist`) {
-			_, err := db.db.Exec("CREATE TABLE IF NOT EXISTS `" + table + "`(`k` VARCHAR(255) NOT NULL,`v` text ,PRIMARY KEY ( `k` ))ENGINE=InnoDB DEFAULT CHARSET=utf8;")
-			if err == nil {
-				return db.Set(table, k, v)
-			} else {
-				fmt.Println("89e9ewq4y7", err)
+		if db.isTableNotExistError(err) {
+			err = db.tryCreateTable(table)
+			if err != nil {
+				return err
 			}
+			return db.Set(table, k, v)
 		}
 		return newDbErr("rzzln8oxfc", err)
 	}
@@ -97,12 +139,19 @@ func (db *KvDb) Set(table, k, v string) error {
 	return nil
 }
 
-func (db *KvDb) Get(table, k string) (string, error) {
-	if ok, err := db.checkTable(table); ok {
+func (db *Db) Get(table, k string) (string, error) {
+	if ok, err := checkTable(table); ok {
 		return "", err
 	}
 	res, err := db.db.Query(`SELECT v FROM `+table+` WHERE k = ?`, k)
 	if err != nil {
+		if db.isTableNotExistError(err) {
+			err = db.tryCreateTable(table)
+			if err != nil {
+				return "", err
+			}
+			return db.Get(table, k)
+		}
 		return "", newDbErr("j0prtj3ipe", err)
 	}
 	if res.Next() == false { //不存在不报错
@@ -116,12 +165,19 @@ func (db *KvDb) Get(table, k string) (string, error) {
 	return v, nil
 }
 
-func (db *KvDb) Delete(table, k string) (bool, error) {
-	if ok, err := db.checkTable(table); ok {
+func (db *Db) Delete(table, k string) (bool, error) {
+	if ok, err := checkTable(table); ok {
 		return false, err
 	}
 	result, err := db.db.Exec(`delete from `+table+` where k = ?`, k)
 	if err != nil {
+		if db.isTableNotExistError(err) {
+			err = db.tryCreateTable(table)
+			if err != nil {
+				return false, err
+			}
+			return db.Delete(table, k)
+		}
 		return false, newDbErr("1zor614tgz", err)
 	}
 	affected, err := result.RowsAffected()
@@ -134,12 +190,19 @@ func (db *KvDb) Delete(table, k string) (bool, error) {
 	return true, nil
 }
 
-func (db *KvDb) Insert(table, k, v string) error {
-	if ok, err := db.checkTable(table); ok {
+func (db *Db) Insert(table, k, v string) error {
+	if ok, err := checkTable(table); ok {
 		return err
 	}
 	result, err := db.db.Exec(`INSERT INTO `+table+` (k,v) VALUES(?,?)`, k, v)
 	if err != nil {
+		if db.isTableNotExistError(err) {
+			err = db.tryCreateTable(table)
+			if err != nil {
+				return err
+			}
+			return db.Insert(table, k, v)
+		}
 		return newDbErr("483t1hrrb8", err)
 	}
 	affected, err := result.RowsAffected()
@@ -204,13 +267,20 @@ type KV struct {
 	V string
 }
 
-func (db *KvDb) GetRange(req GetRangeReq) ([]KV, error) {
-	if ok, err := db.checkTable(req.Table); ok {
+func (db *Db) GetRange(req GetRangeReq) ([]KV, error) {
+	if ok, err := checkTable(req.Table); ok {
 		return nil, err
 	}
 	sql, args := req.sql()
 	rows, err := db.db.Query(sql, args...)
 	if err != nil {
+		if db.isTableNotExistError(err) {
+			err = db.tryCreateTable(req.Table)
+			if err != nil {
+				return nil, err
+			}
+			return db.GetRange(req)
+		}
 		return nil, newDbErr("ruzlw67gu4", err)
 	}
 	var result []KV

@@ -1,4 +1,4 @@
-package mysql
+package mysqlv
 
 type dbError struct {
 	code string
