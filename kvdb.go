@@ -16,6 +16,7 @@ type Db struct {
 }
 
 type BaseConfig struct {
+	Addr     string
 	User     string
 	Password string
 	DbName   string
@@ -28,7 +29,7 @@ func NewKvDb(config BaseConfig) (*Db, error) {
 	if ok, err := checkTable(config.DbName); ok {
 		return nil, err
 	}
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", config.User, config.Password, config.DbName))
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@%s/%s", config.User, config.Password, config.Addr, config.DbName))
 	if err != nil {
 		return nil, err
 	}
