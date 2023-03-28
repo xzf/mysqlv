@@ -110,7 +110,7 @@ func (db *Db) isTableNotExistError(err error) bool {
 }
 
 func (db *Db) tryCreateTable(table string) error {
-	_, err := db.db.Exec("CREATE TABLE IF NOT EXISTS `" + table + "`(`k` VARCHAR(255) NOT NULL,`v` text ,PRIMARY KEY ( `k` ))ENGINE=InnoDB DEFAULT CHARSET=utf8;")
+	_, err := db.db.Exec("CREATE TABLE IF NOT EXISTS `" + table + "`(`k` VARCHAR(255) NOT NULL,`v` MEDIUMTEXT ,PRIMARY KEY ( `k` ))ENGINE=InnoDB DEFAULT CHARSET=utf8;")
 	return err
 }
 
